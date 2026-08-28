@@ -22,16 +22,19 @@ preview written next to each `.lbx` is the *identical* raster that prints.
   (`{"16": "2.2"}`) for rings whose engraving differs from the table.
 - **Focus decoding** — distance in inches (`65535` = ∞), printed as feet
   and inches or centimetres.
-- **Tenths-of-a-stop mode** — iris values as a light meter reads them:
-  `T2.2 → T2 ³⁄₁₀` with a stacked vertical fraction; nominal third-stop
-  engravings (2.2, 3.2, 9, 13 …) snap to 3/10 and 7/10.
+- **Tenths-of-a-stop mode** (default) — iris values as a light meter reads
+  them: `T2.2 → T2 ³⁄₁₀` with a stacked vertical fraction; nominal
+  third-stop engravings (2.2, 3.2, 9, 13 …) snap to 3/10 and 7/10.
+  `--no-iris-tenths` prints plain f-numbers.
 - **End stops** — when a barrel travels past its outermost mark, the motor
   travel limits (0 / 65535) print as unlabeled brackets.
 - Bottom-edge ticks reaching the last printable dot row, auto collision
   handling for crowded marks, scale mirroring and 180° rotation, tape
   widths 6 / 9 / 12 / 18 / 24 mm.
 - **GUI** with live preview and batch conversion of many XMLs to a chosen
-  destination; per-lens `*.key.json` files are picked up automatically.
+  destination; per-lens `*.key.json` files are picked up automatically, and
+  Uniform Mark Size renders a whole lens set at one matched text size
+  (`--label-size` pins it manually from the CLI).
 
 ## Download
 
@@ -56,8 +59,8 @@ CLI examples:
 # 18 mm tape, absolute 0–65535 travel on a 195 mm scale (defaults)
 python3 lensmap2lbx.py examples/XA100845.XML --key examples/XA100845.key.json
 
-# meter-style tenths with T prefix
-python3 lensmap2lbx.py examples/XA100845.XML --iris-tenths --t-prefix
+# plain f-numbers instead of the default tenths-of-a-stop style
+python3 lensmap2lbx.py examples/XA100845.XML --no-iris-tenths
 
 # focus scale in feet/inches on 12 mm tape
 python3 lensmap2lbx.py examples/XA100845.XML --channel focus --tape 12

@@ -39,7 +39,9 @@ mark's printed text with --map ENC=TEXT (repeatable) or --key key.json
 Focus channel (--channel focus) decodes <encoded> as distance: 65535 = INF,
 otherwise inches (default) or cm (--focus-units cm).
 
---iris-tenths reformats iris values the way a light meter reads: tenths of
+Iris values print as tenths of a stop BY DEFAULT (--no-iris-tenths for
+plain f-numbers). --iris-tenths reformats iris values the way a light meter
+reads: tenths of
 a stop above the last nominal full stop (1, 1.4, 2, 2.8, 4, 5.6, 8, 11 ...).
 T2.2 -> '2 3/10', T2.4 -> '2 5/10'; full stops print plain. Nominal
 third-stop engravings (1.1 1.2 1.6 1.8 2.2 2.5 3.2 3.5 4.5 5 6.3 7.1 9 10
@@ -94,7 +96,7 @@ TAPES = {
     24: dict(width_pt=68.0, side_margin_pt=8.4, fmt="261", band_pt=51.2),
 }
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 def app_dir():
@@ -294,7 +296,8 @@ def draw_label(draw, x_left, y_bot, met):
 
 
 def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
-           fit, baseline, font_bold, font_reg, tick_w=3, endstops=True):
+           fit, baseline, font_bold, font_reg, tick_w=3, endstops=True,
+           num_h_override=None):
     """Returns (PIL image, layout dict, list of placed-label x-extents in px)."""
     band_px = round(TAPES[tape_mm]["band_pt"] / PT_PER_PX)          # image height
     end_margin_mm = END_MARGIN_PT / MM_TO_PT                        # 1.976 mm
@@ -371,7 +374,9 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
     # labels: center on ticks, then resolve collisions by nudging apart;
     # shrink the font globally only if labels would drift too far from their ticks
     label_boxes = []
-    for trial_h in (num_h, round(num_h * 0.88), round(num_h * 0.78), round(num_h * 0.68)):
+    trials = ((num_h_override,) if num_h_override else
+              (num_h, round(num_h * 0.88), round(num_h * 0.78), round(num_h * 0.68)))
+    for trial_h in trials:
         MIN_GAP = max(4, round(trial_h * 0.22))                     # digit pairs need real air
         f_num = font_for_height(font_bold, max(9, trial_h))
         frac_h = round(max(9, trial_h) * 0.42)
@@ -380,7 +385,10 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
         for pos, enc, text in marks:
             met = label_metrics(draw, text, f_num, f_frac)
             items.append([x_f(pos), met["w"] / 2.0, met])
-        ideal = [it[0] for it in items]
+        # ideal = tick center clamped to the printable area: edge labels are
+        # expected to sit shifted inward, so boundary clamping is not drift —
+        # only collision-driven displacement should trigger a font shrink
+        ideal = [min(max(it[0], it[1] + 2), img_w - it[1] - 2) for it in items]
         order = sorted(range(len(items)), key=lambda i: items[i][0])
         for _ in range(200):
             moved = False
@@ -400,7 +408,7 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
             if not moved:
                 break
         max_drift = max(abs(it[0] - i0) for it, i0 in zip(items, ideal))
-        if max_drift <= max(6, trial_h * 0.7):
+        if num_h_override or max_drift <= max(6, trial_h * 0.7):
             break
     y_bot = band_px - (base_h + tick_h + gap)                       # label ink bottom
     for (c, hw, met), (_, enc, _) in zip(items, marks):
@@ -422,7 +430,7 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
         img = img.rotate(180)
     layout = dict(img_w=img_w, band_px=band_px, printable_mm=printable_mm,
                   end_margin_mm=end_margin_mm, scale_x0_mm=scale_x0_mm,
-                  endstops=drawn_stops)
+                  endstops=drawn_stops, num_h=max(9, trial_h))
     return img, layout, label_boxes
 
 
@@ -556,9 +564,14 @@ def main():
                     help="single override, e.g. --map 16=2.2 (repeatable)")
     ap.add_argument("--info", help="override the info line ('' to omit)")
     ap.add_argument("--t-prefix", action="store_true", help="prefix iris numbers with 'T'")
-    ap.add_argument("--iris-tenths", action="store_true",
+    ap.add_argument("--iris-tenths", action="store_true", default=True,
                     help="show iris values as tenths of a stop above the last full "
-                         "stop (2.2 -> '2 3/10'); applies to numeric --key/--map values too")
+                         "stop (2.2 -> '2 3/10'); ON by default")
+    ap.add_argument("--no-iris-tenths", dest="iris_tenths", action="store_false",
+                    help="print iris values as plain f-numbers (2.2, 3.2, 11)")
+    ap.add_argument("--label-size", type=int, default=None, metavar="PX",
+                    help="pin mark-number height in pixels instead of auto-fitting "
+                         "(use one value across a lens set for a uniform look)")
     ap.add_argument("--fit", action="store_true", help="map min..max marks to the scale instead of 0..65535")
     ap.add_argument("--reverse", action="store_true", help="mirror the scale left<->right")
     ap.add_argument("--rotate180", action="store_true", help="rotate the whole label 180\u00b0")
@@ -598,7 +611,7 @@ def main():
     img, layout, _ = render(marks, info, args.tape, args.length, args.scale,
                             args.reverse, args.rotate180, args.fit,
                             not args.no_baseline, fb, fr, tick_w=args.tick_width,
-                            endstops=args.endstops)
+                            endstops=args.endstops, num_h_override=args.label_size)
 
     stem = Path(args.lensfile).stem
     out = Path(args.out) if args.out else Path(f"{stem}_{args.channel}.lbx")
@@ -609,7 +622,8 @@ def main():
 
     lo, hi = (min(p for p, _, _ in marks), max(p for p, _, _ in marks)) if args.fit else (0, 65535)
     print(f"{args.channel} marks  (motor {lo}..{hi} -> {args.scale} mm, "
-          f"label {args.length} mm on {args.tape} mm tape, {img.width}x{img.height} px @180dpi)")
+          f"label {args.length} mm on {args.tape} mm tape, {img.width}x{img.height} "
+          f"px @180dpi, mark size {layout['num_h']} px)")
     print(f"{'pos':>7}  {'enc':>5}  {'text':>6}  {'mm':>9}")
     rows = [(p, str(e), t, "key" if str(e) in overrides else "formula") for p, e, t in marks]
     rows += [(p, "-", "STOP", "end stop") for p in layout["endstops"]]

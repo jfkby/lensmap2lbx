@@ -41,9 +41,9 @@ except Exception:                                   # preview pane degrades grac
 SETTING_DEFAULTS = dict(
     channel="iris", tape=18, length=200.0, scale=195.0,
     fit=False, reverse=False, rotate180=False, baseline=True, endstops=True,
-    t_prefix=False, iris_tenths=False, tick_width=3, focus_units="in",
+    t_prefix=False, iris_tenths=True, tick_width=3, focus_units="in",
     info_mode="auto", info_text="",
-    global_key="", auto_keys=True, manual_maps="",
+    global_key="", auto_keys=True, manual_maps="", label_size=None,
 )
 
 
@@ -90,8 +90,9 @@ def build_label(xml_path, s, fonts):
         img, layout, _ = core.render(
             marks, info, s["tape"], s["length"], s["scale"],
             s["reverse"], s["rotate180"], s["fit"], s["baseline"],
-            fonts[0], fonts[1], tick_w=s["tick_width"], endstops=s["endstops"])
-        return details, img, marks
+            fonts[0], fonts[1], tick_w=s["tick_width"], endstops=s["endstops"],
+            num_h_override=s.get("label_size"))
+        return details, img, marks, layout
     except SystemExit as e:                          # core uses sys.exit(msg)
         raise ValueError(str(e.code)) from None
 
@@ -115,7 +116,7 @@ def write_outputs(xml_path, dest_dir, s, details, img):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title(f"lensmap2lbx {core.__version__} — lens scale labels")
+        root.title(f"lensmap2lbx {core.__version__} — Lens Scale Labels")
         root.minsize(880, 560)
 
         fb, fr = core.find_font(core.FONT_BOLD), core.find_font(core.FONT_REG)
@@ -147,6 +148,8 @@ class App:
         self.global_key = tk.StringVar(value=v["global_key"])
         self.auto_keys = tk.BooleanVar(value=v["auto_keys"])
         self.manual_maps = tk.StringVar(value=v["manual_maps"])
+        self.uniform_size = tk.BooleanVar(value=True)
+        self._size_cache = {}                             # (path, settings) -> px
         self.dest_mode = tk.StringVar(value="beside")     # beside | folder
         self.dest_folder = tk.StringVar(value="")
 
@@ -156,7 +159,8 @@ class App:
                     self.reverse, self.rotate180, self.baseline, self.endstops,
                     self.t_prefix, self.iris_tenths, self.tick_width,
                     self.focus_units, self.info_mode, self.info_text,
-                    self.global_key, self.auto_keys, self.manual_maps):
+                    self.global_key, self.auto_keys, self.manual_maps,
+                    self.uniform_size):
             var.trace_add("write", lambda *_: self.schedule_preview())
         self._preview_job = None
 
@@ -171,7 +175,7 @@ class App:
         top.rowconfigure(0, weight=1)
 
         # -- left: file list --
-        left = ttk.LabelFrame(top, text="Lens map XML files", padding=4)
+        left = ttk.LabelFrame(top, text="Lens Map XML Files", padding=4)
         left.grid(row=0, column=0, sticky="nsew", **pad)
         left.rowconfigure(0, weight=1)
         left.columnconfigure(0, weight=1)
@@ -191,7 +195,7 @@ class App:
         dest = ttk.LabelFrame(left, text="Destination for .lbx / .png", padding=4)
         dest.grid(row=2, column=0, columnspan=4, sticky="ew", **pad)
         dest.columnconfigure(2, weight=1)
-        ttk.Radiobutton(dest, text="Next to each XML", value="beside",
+        ttk.Radiobutton(dest, text="Next to Each XML", value="beside",
                         variable=self.dest_mode).grid(row=0, column=0, sticky="w", **pad)
         ttk.Radiobutton(dest, text="Folder:", value="folder",
                         variable=self.dest_mode).grid(row=1, column=0, sticky="w", **pad)
@@ -199,7 +203,7 @@ class App:
         ttk.Button(dest, text="Choose…", command=self.pick_dest).grid(row=1, column=3, **pad)
 
         # -- right: settings --
-        s = ttk.LabelFrame(top, text="Label settings", padding=4)
+        s = ttk.LabelFrame(top, text="Label Settings", padding=4)
         s.grid(row=0, column=1, sticky="nsew", **pad)
         r = 0
         ttk.Label(s, text="Channel").grid(row=r, column=0, sticky="w", **pad)
@@ -208,30 +212,31 @@ class App:
         ttk.Label(s, text="Tape (mm)").grid(row=r, column=2, sticky="w", **pad)
         ttk.Combobox(s, textvariable=self.tape, values=sorted(core.TAPES),
                      state="readonly", width=5).grid(row=r, column=3, sticky="w", **pad); r += 1
-        ttk.Label(s, text="Label length (mm)").grid(row=r, column=0, sticky="w", **pad)
+        ttk.Label(s, text="Label Length (mm)").grid(row=r, column=0, sticky="w", **pad)
         ttk.Entry(s, textvariable=self.length, width=8).grid(row=r, column=1, sticky="w", **pad)
-        ttk.Label(s, text="Scale span (mm)").grid(row=r, column=2, sticky="w", **pad)
+        ttk.Label(s, text="Scale Span (mm)").grid(row=r, column=2, sticky="w", **pad)
         ttk.Entry(s, textvariable=self.scale, width=8).grid(row=r, column=3, sticky="w", **pad); r += 1
-        ttk.Label(s, text="Tick width (dots)").grid(row=r, column=0, sticky="w", **pad)
+        ttk.Label(s, text="Tick Width (dots)").grid(row=r, column=0, sticky="w", **pad)
         ttk.Spinbox(s, from_=1, to=6, textvariable=self.tick_width,
                     width=5, state="readonly").grid(row=r, column=1, sticky="w", **pad)
-        ttk.Label(s, text="Focus units").grid(row=r, column=2, sticky="w", **pad)
+        ttk.Label(s, text="Focus Units").grid(row=r, column=2, sticky="w", **pad)
         ttk.Combobox(s, textvariable=self.focus_units, values=("in", "cm"),
                      state="readonly", width=5).grid(row=r, column=3, sticky="w", **pad); r += 1
 
-        checks = [("Fit min→max marks (ignore absolute travel)", self.fit),
-                  ("Reverse (mirror scale)", self.reverse),
+        checks = [("Fit Min→Max Marks (Ignore Absolute Travel)", self.fit),
+                  ("Reverse (Mirror Scale)", self.reverse),
                   ("Rotate 180°", self.rotate180),
-                  ("Baseline along edge", self.baseline),
-                  ("Mark end stops", self.endstops),
-                  ("T prefix on iris numbers", self.t_prefix),
-                  ("Iris as tenths of a stop (2 3/10)", self.iris_tenths)]
+                  ("Baseline Along Edge", self.baseline),
+                  ("Mark End Stops", self.endstops),
+                  ("T Prefix on Iris Numbers", self.t_prefix),
+                  ("Iris as Tenths of a Stop (2 3/10)", self.iris_tenths),
+                  ("Uniform Mark Size Across Files", self.uniform_size)]
         for text, var in checks:
             ttk.Checkbutton(s, text=text, variable=var).grid(
                 row=r, column=0, columnspan=4, sticky="w", **pad); r += 1
 
         ttk.Separator(s).grid(row=r, column=0, columnspan=4, sticky="ew", pady=4); r += 1
-        ttk.Label(s, text="Info line").grid(row=r, column=0, sticky="w", **pad)
+        ttk.Label(s, text="Info Line").grid(row=r, column=0, sticky="w", **pad)
         ttk.Radiobutton(s, text="Auto", value="auto",
                         variable=self.info_mode).grid(row=r, column=1, sticky="w", **pad)
         ttk.Radiobutton(s, text="Custom:", value="custom",
@@ -240,25 +245,25 @@ class App:
             row=r, column=0, columnspan=4, sticky="ew", **pad); r += 1
 
         ttk.Separator(s).grid(row=r, column=0, columnspan=4, sticky="ew", pady=4); r += 1
-        ttk.Label(s, text="Global key file").grid(row=r, column=0, sticky="w", **pad)
+        ttk.Label(s, text="Global Key File").grid(row=r, column=0, sticky="w", **pad)
         ttk.Entry(s, textvariable=self.global_key).grid(
             row=r, column=1, columnspan=2, sticky="ew", **pad)
         ttk.Button(s, text="…", width=3, command=self.pick_key).grid(row=r, column=3, **pad); r += 1
-        ttk.Checkbutton(s, text="Auto per-lens keys (<stem>.key.json beside XML)",
+        ttk.Checkbutton(s, text="Auto Per-Lens Keys (<stem>.key.json beside XML)",
                         variable=self.auto_keys).grid(row=r, column=0, columnspan=4,
                                                       sticky="w", **pad); r += 1
-        ttk.Label(s, text="Manual maps (ENC=TEXT …)").grid(row=r, column=0,
+        ttk.Label(s, text="Manual Maps (ENC=TEXT …)").grid(row=r, column=0,
                                                            columnspan=2, sticky="w", **pad)
         ttk.Entry(s, textvariable=self.manual_maps).grid(
             row=r, column=2, columnspan=2, sticky="ew", **pad); r += 1
 
-        ttk.Button(s, text="Generate all", command=self.generate_all).grid(
+        ttk.Button(s, text="Generate All", command=self.generate_all).grid(
             row=r, column=0, columnspan=2, sticky="ew", padx=4, pady=8)
-        ttk.Button(s, text="Generate selected", command=self.generate_selected).grid(
+        ttk.Button(s, text="Generate Selected", command=self.generate_selected).grid(
             row=r, column=2, columnspan=2, sticky="ew", padx=4, pady=8)
 
         # -- bottom: preview + status --
-        bot = ttk.LabelFrame(self.root, text="Preview (exact print raster, scaled to fit)",
+        bot = ttk.LabelFrame(self.root, text="Preview (Exact Print Raster, Scaled to Fit)",
                              padding=4)
         bot.pack(fill="x", padx=6, pady=(0, 6))
         self.canvas = tk.Canvas(bot, height=150, background="#d0d0d0",
@@ -288,14 +293,14 @@ class App:
                     info_mode=self.info_mode.get(), info_text=self.info_text.get(),
                     global_key=self.global_key.get().strip(),
                     auto_keys=self.auto_keys.get(),
-                    manual_maps=self.manual_maps.get())
+                    manual_maps=self.manual_maps.get(), label_size=None)
 
     def files(self):
         return [self.tree.item(i, "text") for i in self.tree.get_children()]
 
     def add_files(self):
         for p in filedialog.askopenfilenames(
-                title="Add lens map XML files",
+                title="Add Lens Map XML Files",
                 filetypes=[("Lens map XML", "*.xml *.XML"), ("All files", "*")]):
             if p not in self.files():
                 self.tree.insert("", "end", text=p, values=("",))
@@ -314,16 +319,36 @@ class App:
         self.schedule_preview()
 
     def pick_dest(self):
-        d = filedialog.askdirectory(title="Destination folder")
+        d = filedialog.askdirectory(title="Destination Folder")
         if d:
             self.dest_folder.set(d)
             self.dest_mode.set("folder")
 
     def pick_key(self):
-        p = filedialog.askopenfilename(title="Global key JSON",
+        p = filedialog.askopenfilename(title="Global Key JSON",
                                        filetypes=[("JSON", "*.json"), ("All files", "*")])
         if p:
             self.global_key.set(p)
+
+    def apply_uniform(self, s):
+        """When Uniform Mark Size is on, pin label_size to the smallest size
+        the auto-fit would pick across all loaded files."""
+        if not self.uniform_size.get():
+            return s
+        probe = dict(s, label_size=None)
+        pkey = tuple(sorted((k, v) for k, v in probe.items()))
+        sizes = []
+        for p in self.files():
+            key = (p, pkey)
+            if key not in self._size_cache:
+                try:
+                    *_, layout = build_label(p, probe, self.fonts)
+                    self._size_cache[key] = layout["num_h"]
+                except Exception:
+                    self._size_cache[key] = None
+            if self._size_cache[key]:
+                sizes.append(self._size_cache[key])
+        return dict(s, label_size=min(sizes)) if sizes else s
 
     def selected_file(self):
         sel = self.tree.selection()
@@ -347,8 +372,8 @@ class App:
             self.status.config(text="Add lens map XML files to begin.")
             return
         try:
-            s = self.settings()
-            details, img, marks = build_label(path, s, self.fonts)
+            s = self.apply_uniform(self.settings())
+            details, img, marks, layout = build_label(path, s, self.fonts)
         except Exception as e:
             self.status.config(text=f"{Path(path).name}: {e}")
             return
@@ -356,7 +381,7 @@ class App:
         self.status.config(
             text=f"{Path(path).name} — {len(marks)} marks, {img.width}×{img.height}px "
                  f"({mm_w:.1f} × {img.height / core.DPMM:.1f} mm printable) "
-                 f"on {s['tape']} mm tape")
+                 f"on {s['tape']} mm tape, mark size {layout['num_h']} px")
         if not HAVE_IMAGETK:
             return
         cw = max(self.canvas.winfo_width(), 50)
@@ -378,6 +403,7 @@ class App:
         except ValueError as e:
             messagebox.showerror("lensmap2lbx", str(e))
             return
+        s = self.apply_uniform(s)
         if s["fit"] and s["endstops"]:
             pass                                    # core warns per-file if out of range
         if self.dest_mode.get() == "folder":
@@ -397,7 +423,7 @@ class App:
             if path not in paths:
                 continue
             try:
-                details, img, _ = build_label(path, s, self.fonts)
+                details, img, _, _ = build_label(path, s, self.fonts)
                 d = Path(path).parent if self.dest_mode.get() == "beside" \
                     else Path(self.dest_folder.get())
                 out = write_outputs(path, d, s, details, img)
