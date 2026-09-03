@@ -43,7 +43,7 @@ SETTING_DEFAULTS = dict(
     fit=False, reverse=False, rotate180=False, baseline=True, endstops=True,
     t_prefix=False, iris_tenths=True, tick_width=3, focus_units="in",
     info_mode="auto", info_text="",
-    global_key="", auto_keys=True, manual_maps="", label_size=None,
+    global_key="", auto_keys=True, manual_maps="", label_size=None, rotate_marks=True,
 )
 
 
@@ -91,7 +91,7 @@ def build_label(xml_path, s, fonts):
             marks, info, s["tape"], s["length"], s["scale"],
             s["reverse"], s["rotate180"], s["fit"], s["baseline"],
             fonts[0], fonts[1], tick_w=s["tick_width"], endstops=s["endstops"],
-            num_h_override=s.get("label_size"))
+            num_h_override=s.get("label_size"), rotate_marks=s["rotate_marks"])
         return details, img, marks, layout
     except SystemExit as e:                          # core uses sys.exit(msg)
         raise ValueError(str(e.code)) from None
@@ -148,6 +148,7 @@ class App:
         self.global_key = tk.StringVar(value=v["global_key"])
         self.auto_keys = tk.BooleanVar(value=v["auto_keys"])
         self.manual_maps = tk.StringVar(value=v["manual_maps"])
+        self.rotate_marks = tk.BooleanVar(value=False)
         self.uniform_size = tk.BooleanVar(value=True)
         self._size_cache = {}                             # (path, settings) -> px
         self.dest_mode = tk.StringVar(value="beside")     # beside | folder
@@ -160,7 +161,7 @@ class App:
                     self.t_prefix, self.iris_tenths, self.tick_width,
                     self.focus_units, self.info_mode, self.info_text,
                     self.global_key, self.auto_keys, self.manual_maps,
-                    self.uniform_size):
+                    self.uniform_size, self.rotate_marks):
             var.trace_add("write", lambda *_: self.schedule_preview())
         self._preview_job = None
 
@@ -230,6 +231,7 @@ class App:
                   ("Mark End Stops", self.endstops),
                   ("T Prefix on Iris Numbers", self.t_prefix),
                   ("Iris as Tenths of a Stop (2 3/10)", self.iris_tenths),
+                  ("Vertical Mark Numbers (Centered on Ticks)", self.rotate_marks),
                   ("Uniform Mark Size Across Files", self.uniform_size)]
         for text, var in checks:
             ttk.Checkbutton(s, text=text, variable=var).grid(
@@ -293,7 +295,8 @@ class App:
                     info_mode=self.info_mode.get(), info_text=self.info_text.get(),
                     global_key=self.global_key.get().strip(),
                     auto_keys=self.auto_keys.get(),
-                    manual_maps=self.manual_maps.get(), label_size=None)
+                    manual_maps=self.manual_maps.get(), label_size=None,
+                    rotate_marks=self.rotate_marks.get())
 
     def files(self):
         return [self.tree.item(i, "text") for i in self.tree.get_children()]

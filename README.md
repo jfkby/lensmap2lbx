@@ -31,6 +31,11 @@ preview written next to each `.lbx` is the *identical* raster that prints.
 - Bottom-edge ticks reaching the last printable dot row, auto collision
   handling for crowded marks, scale mirroring and 180° rotation, tape
   widths 6 / 9 / 12 / 18 / 24 mm.
+- **Vertical mark numbers** (default) — numbers rotated 90°, each centered
+  above a short ruler-style tick pointing at the middle of the character
+  height; a mark's footprint along the scale is one text height, so dense
+  scales keep full-size numbers. `--no-rotate-marks` restores horizontal
+  numbers.
 - **GUI** with live preview and batch conversion of many XMLs to a chosen
   destination; per-lens `*.key.json` files are picked up automatically, and
   Uniform Mark Size renders a whole lens set at one matched text size

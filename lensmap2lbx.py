@@ -52,6 +52,12 @@ character wide (falls back to inline text if the band is too small for
 legible fraction digits). Numeric override values are reformatted too;
 non-numeric override text stays verbatim.
 
+Mark numbers print rotated 90° BY DEFAULT (reading bottom-to-top), each
+stacked above a short ruler-style tick that points at the middle of the
+character height. A number's footprint along the scale is then one text
+height, so crowded scales keep full-size numbers. --no-rotate-marks gives
+the horizontal style with numbers beside taller ticks.
+
 End stops: motor 0 and 65535 are the mechanical travel limits. If a barrel
 travels past its outermost mark (the mark sits > 1.5 mm inside the stop on
 the printed scale), the stop is drawn as an unlabeled bracket — a full-height
@@ -96,7 +102,7 @@ TAPES = {
     24: dict(width_pt=68.0, side_margin_pt=8.4, fmt="261", band_pt=51.2),
 }
 
-__version__ = "1.1.0"
+__version__ = "1.3.0"
 
 
 def app_dir():
@@ -297,7 +303,7 @@ def draw_label(draw, x_left, y_bot, met):
 
 def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
            fit, baseline, font_bold, font_reg, tick_w=3, endstops=True,
-           num_h_override=None):
+           num_h_override=None, rotate_marks=False):
     """Returns (PIL image, layout dict, list of placed-label x-extents in px)."""
     band_px = round(TAPES[tape_mm]["band_pt"] / PT_PER_PX)          # image height
     end_margin_mm = END_MARGIN_PT / MM_TO_PT                        # 1.976 mm
@@ -327,6 +333,8 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
 
     # vertical layout (px), proportional to band height
     tick_h = max(14, round(band_px * 0.30))
+    if rotate_marks:
+        tick_h = max(10, round(band_px * 0.14))
     num_h = max(11, min(round(band_px * 0.32), 36))
     gap = max(2, round(band_px * 0.06))
     info_h = max(9, min(round(band_px * 0.17), 19))
@@ -371,55 +379,110 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
                 draw.rectangle([x0 - arm, top, x0 - 1, top + tick_w - 1], fill=0)
             drawn_stops.append(stop_pos)
 
-    # labels: center on ticks, then resolve collisions by nudging apart;
-    # shrink the font globally only if labels would drift too far from their ticks
+    # labels
     label_boxes = []
     trials = ((num_h_override,) if num_h_override else
               (num_h, round(num_h * 0.88), round(num_h * 0.78), round(num_h * 0.68)))
-    for trial_h in trials:
-        MIN_GAP = max(4, round(trial_h * 0.22))                     # digit pairs need real air
-        f_num = font_for_height(font_bold, max(9, trial_h))
-        frac_h = round(max(9, trial_h) * 0.42)
-        f_frac = font_for_height(font_bold, frac_h) if frac_h >= 8 else None
-        items = []                                                  # [ink_center, half_w, metrics]
-        for pos, enc, text in marks:
-            met = label_metrics(draw, text, f_num, f_frac)
-            items.append([x_f(pos), met["w"] / 2.0, met])
-        # ideal = tick center clamped to the printable area: edge labels are
-        # expected to sit shifted inward, so boundary clamping is not drift —
-        # only collision-driven displacement should trigger a font shrink
-        ideal = [min(max(it[0], it[1] + 2), img_w - it[1] - 2) for it in items]
-        order = sorted(range(len(items)), key=lambda i: items[i][0])
-        for _ in range(200):
-            moved = False
-            for i in order:                                         # clamp to image
-                c, h = items[i][0], items[i][1]
-                nc = min(max(c, h + 2), img_w - h - 2)
-                if nc != c:
-                    items[i][0], moved = nc, True
-            for a, b in zip(order, order[1:]):                      # push apart
-                need = items[a][1] + items[b][1] + MIN_GAP
-                d = items[b][0] - items[a][0]
-                if d < need:
-                    shift = (need - d) / 2.0
-                    items[a][0] -= shift
-                    items[b][0] += shift
-                    moved = True
-            if not moved:
+    rot_info_ok = rotate_marks and bool(info_text) and band_px >= 60
+    if rotate_marks:
+        # vertical numbers: each label is rendered horizontally, rotated 90°
+        # CCW (reads bottom-to-top) and stacked above its (shortened) tick,
+        # centered so the tick line points at the middle of the character
+        # height. Footprint along the scale is one text HEIGHT, so dense
+        # scales keep full-size numbers. Edge marks clamp inward to stay on
+        # the label, like horizontal mode.
+        GAP_V = 3                                                   # tick top -> number
+        reserve = (min(round(band_px * 0.17), 19) + 6) if rot_info_ok else 2
+        anchor = band_px - base_h - tick_h - GAP_V                  # number bottoms
+        avail = anchor - reserve                                    # max number length
+
+        def measure(th):
+            f_n = font_for_height(font_bold, max(9, th))
+            fh = round(max(9, th) * 0.42)
+            f_f = font_for_height(font_bold, fh) if fh >= 8 else None
+            ms = [label_metrics(draw, text, f_n, f_f) for _, _, text in marks]
+            fp = max(m.get("H", m["mb"][3] - m["mb"][1]) for m in ms)
+            xs = sorted(x_f(p) for p, _, _ in marks)
+            ok_p = all(b - a >= fp + 4 for a, b in zip(xs, xs[1:]))
+            return ms, ok_p, max(m["w"] for m in ms)
+
+        # priority: keep the info line, shrinking marks to coexist with it;
+        # drop it only if even the smallest tier cannot fit alongside it
+        chosen = None
+        for trial_h in trials:
+            mets, pitch_ok, maxw = measure(trial_h)
+            if num_h_override or (pitch_ok and maxw <= avail):
+                chosen = (trial_h, mets)
                 break
-        max_drift = max(abs(it[0] - i0) for it, i0 in zip(items, ideal))
-        if num_h_override or max_drift <= max(6, trial_h * 0.7):
-            break
-    y_bot = band_px - (base_h + tick_h + gap)                       # label ink bottom
-    for (c, hw, met), (_, enc, _) in zip(items, marks):
-        draw_label(draw, c - hw, y_bot, met)
-        label_boxes.append((enc, met["text"], c - hw, c + hw))
+        if chosen is None:
+            if rot_info_ok:
+                rot_info_ok, info_text = False, ""
+                avail = anchor - 2
+                print("note: info line omitted to fit vertical mark numbers",
+                      file=sys.stderr)
+            for trial_h in trials:
+                mets, pitch_ok, maxw = measure(trial_h)
+                if (pitch_ok and maxw <= avail) or trial_h == trials[-1]:
+                    chosen = (trial_h, mets)
+                    break
+        trial_h, mets = chosen
+        for (pos, enc, _), met in zip(marks, mets):
+            hh = met.get("H", met["mb"][3] - met["mb"][1])
+            tile = Image.new("L", (math.ceil(met["w"]) + 2, hh + 2), 255)
+            draw_label(ImageDraw.Draw(tile), 1, hh + 1, met)
+            rot = tile.rotate(90, expand=True)
+            x_num = round(x_f(pos) - rot.width / 2.0)               # center on tick
+            x_num = min(max(x_num, 2), img_w - rot.width - 2)       # clamp inside
+            y_num = max(2, anchor - rot.height)
+            img.paste(rot, (int(x_num), int(y_num)))
+            label_boxes.append((enc, met["text"], x_num, x_num + rot.width))
+    else:
+        # center on ticks, then resolve collisions by nudging apart; shrink the
+        # font globally only if labels would drift too far from their ticks
+        for trial_h in trials:
+            MIN_GAP = max(4, round(trial_h * 0.22))                 # digit pairs need real air
+            f_num = font_for_height(font_bold, max(9, trial_h))
+            frac_h = round(max(9, trial_h) * 0.42)
+            f_frac = font_for_height(font_bold, frac_h) if frac_h >= 8 else None
+            items = []                                              # [ink_center, half_w, metrics]
+            for pos, enc, text in marks:
+                met = label_metrics(draw, text, f_num, f_frac)
+                items.append([x_f(pos), met["w"] / 2.0, met])
+            # ideal = tick center clamped to the printable area: edge labels are
+            # expected to sit shifted inward, so boundary clamping is not drift —
+            # only collision-driven displacement should trigger a font shrink
+            ideal = [min(max(it[0], it[1] + 2), img_w - it[1] - 2) for it in items]
+            order = sorted(range(len(items)), key=lambda i: items[i][0])
+            for _ in range(200):
+                moved = False
+                for i in order:                                     # clamp to image
+                    c, h = items[i][0], items[i][1]
+                    nc = min(max(c, h + 2), img_w - h - 2)
+                    if nc != c:
+                        items[i][0], moved = nc, True
+                for a, b in zip(order, order[1:]):                  # push apart
+                    need = items[a][1] + items[b][1] + MIN_GAP
+                    d = items[b][0] - items[a][0]
+                    if d < need:
+                        shift = (need - d) / 2.0
+                        items[a][0] -= shift
+                        items[b][0] += shift
+                        moved = True
+                if not moved:
+                    break
+            max_drift = max(abs(it[0] - i0) for it, i0 in zip(items, ideal))
+            if num_h_override or max_drift <= max(6, trial_h * 0.7):
+                break
+        y_bot = band_px - (base_h + tick_h + gap)                   # label ink bottom
+        for (c, hw, met), (_, enc, _) in zip(items, marks):
+            draw_label(draw, c - hw, y_bot, met)
+            label_boxes.append((enc, met["text"], c - hw, c + hw))
 
     if info_text:
         box = draw.textbbox((0, 0), info_text, font=f_info)
         ih = box[3] - box[1]
         bottom_used = base_h + tick_h + gap + num_h
-        if band_px - bottom_used >= ih + 4:
+        if rot_info_ok if rotate_marks else (band_px - bottom_used >= ih + 4):
             ix = max(2, round(scale_x0_mm * DPMM))
             draw.text((ix, 2 - box[1]), info_text, font=f_info, fill=0)
         else:
@@ -569,6 +632,11 @@ def main():
                          "stop (2.2 -> '2 3/10'); ON by default")
     ap.add_argument("--no-iris-tenths", dest="iris_tenths", action="store_false",
                     help="print iris values as plain f-numbers (2.2, 3.2, 11)")
+    ap.add_argument("--rotate-marks", action="store_true", default=True,
+                    help="rotate mark numbers 90°, centered above their ticks; "
+                         "ON by default")
+    ap.add_argument("--no-rotate-marks", dest="rotate_marks", action="store_false",
+                    help="horizontal mark numbers next to the ticks")
     ap.add_argument("--label-size", type=int, default=None, metavar="PX",
                     help="pin mark-number height in pixels instead of auto-fitting "
                          "(use one value across a lens set for a uniform look)")
@@ -611,7 +679,8 @@ def main():
     img, layout, _ = render(marks, info, args.tape, args.length, args.scale,
                             args.reverse, args.rotate180, args.fit,
                             not args.no_baseline, fb, fr, tick_w=args.tick_width,
-                            endstops=args.endstops, num_h_override=args.label_size)
+                            endstops=args.endstops, num_h_override=args.label_size,
+                            rotate_marks=args.rotate_marks)
 
     stem = Path(args.lensfile).stem
     out = Path(args.out) if args.out else Path(f"{stem}_{args.channel}.lbx")
