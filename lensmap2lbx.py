@@ -305,7 +305,10 @@ def draw_label(draw, x_left, y_bot, met):
 def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
            fit, baseline, font_bold, font_reg, tick_w=3, endstops=True,
            num_h_override=None, rotate_marks=False):
-    """Returns (PIL image, layout dict, list of placed-label x-extents in px)."""
+    """Returns (PIL image, layout dict, list of placed-label x-extents in px).
+    Layout problems (omitted info line, crowded marks ...) are collected in
+    layout["warnings"] rather than printed, so callers choose how to show them."""
+    warnings = []
     band_px = round(TAPES[tape_mm]["band_pt"] / PT_PER_PX)          # image height
     end_margin_mm = END_MARGIN_PT / MM_TO_PT                        # 1.976 mm
     printable_mm = label_mm - 2 * end_margin_mm
@@ -368,8 +371,8 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
                 continue                                            # mark is (at) the stop
             x0 = stroke(x_stop)
             if x0 < 0 or x0 + tick_w > img_w:
-                print(f"warning: end stop (motor {stop_pos}) falls outside the "
-                      f"printable area — not drawn", file=sys.stderr)
+                warnings.append(f"warning: end stop (motor {stop_pos}) falls outside "
+                                f"the printable area — not drawn")
                 continue
             top = band_px - (base_h + tick_h)
             draw.rectangle([x0, top, x0 + tick_w - 1, band_px - 1], fill=0)
@@ -420,8 +423,7 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
             if rot_info_ok:
                 rot_info_ok, info_text = False, ""
                 avail = anchor - 2
-                print("note: info line omitted to fit vertical mark numbers",
-                      file=sys.stderr)
+                warnings.append("note: info line omitted to fit vertical mark numbers")
             for trial_h in trials:
                 mets, pitch_ok, maxw = measure(trial_h)
                 if ((pitch_ok or num_h_override) and maxw <= avail) or trial_h == trials[-1]:
@@ -429,8 +431,8 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
                     break
         trial_h, mets, pitch_ok = chosen
         if not pitch_ok:
-            print("warning: marks too close for vertical numbers — some overlap; "
-                  "try a longer scale or --no-rotate-marks", file=sys.stderr)
+            warnings.append("warning: marks too close for vertical numbers — some "
+                            "overlap; try a longer scale or --no-rotate-marks")
         for (pos, enc, _), met in zip(marks, mets):
             hh = met.get("H", met["mb"][3] - met["mb"][1])
             tile = Image.new("L", (math.ceil(met["w"]) + 2, hh + 2), 255)
@@ -494,14 +496,14 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
             ix = max(2, round(scale_x0_mm * DPMM))
             draw.text((ix, 2 - box[1]), info_text, font=f_info, fill=0)
         else:
-            print("warning: tape too narrow for info line — omitted", file=sys.stderr)
+            warnings.append("warning: tape too narrow for info line — omitted")
 
     img = img.point(lambda v: 255 if v >= 128 else 0)               # hard 1-bit
     if rotate180:
         img = img.rotate(180)
     layout = dict(img_w=img_w, band_px=band_px, printable_mm=printable_mm,
                   end_margin_mm=end_margin_mm, scale_x0_mm=scale_x0_mm,
-                  endstops=drawn_stops, num_h=max(9, trial_h))
+                  endstops=drawn_stops, num_h=max(9, trial_h), warnings=warnings)
     return img, layout, label_boxes
 
 
@@ -689,6 +691,8 @@ def main():
                             not args.no_baseline, fb, fr, tick_w=args.tick_width,
                             endstops=args.endstops, num_h_override=args.label_size,
                             rotate_marks=args.rotate_marks)
+    for w in layout["warnings"]:
+        print(w, file=sys.stderr)
 
     stem = Path(args.lensfile).stem
     out = Path(args.out) if args.out else Path(f"{stem}_{args.channel}.lbx")
