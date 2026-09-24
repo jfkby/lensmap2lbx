@@ -5,3 +5,6 @@ dist/
 .DS_Store
 *.lbx
 !examples/*.lbx
+# generated label previews (written next to each .lbx)
+*_iris.png
+*_focus.png

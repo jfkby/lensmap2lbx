@@ -129,7 +129,11 @@ FONT_REG = ["DejaVuSansCondensed.ttf", "DejaVuSans.ttf", "LiberationSans-Regular
 # ----------------------------------------------------------------------------
 
 def parse_lensmap(path):
-    root = ET.parse(path).getroot()
+    """Raises ValueError with a readable message for malformed files."""
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as e:
+        raise ValueError(f"{Path(path).name}: not valid XML ({e})") from None
     details = {}
     d = root.find("lensDetails")
     if d is not None:
@@ -139,12 +143,28 @@ def parse_lensmap(path):
     if data is not None:
         for section in data:
             marks = []
-            for m in section.findall("lensMark"):
-                pos = int(m.findtext("position"))
-                enc = int(m.findtext("encoded"))
+            for i, m in enumerate(section.findall("lensMark"), 1):
+                try:
+                    pos = int(m.findtext("position"))
+                    enc = int(m.findtext("encoded"))
+                except (TypeError, ValueError):
+                    raise ValueError(f"{Path(path).name}: <{section.tag}> lensMark {i} "
+                                     f"needs integer <position> and <encoded>") from None
                 marks.append((pos, enc))
             channels[section.tag] = sorted(marks)
     return details, channels
+
+
+def load_key(path):
+    """Key file {"encoded": "printed text"} -> {str: str}; ValueError if malformed."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{Path(path).name}: not valid JSON ({e})") from None
+    if not isinstance(data, dict):
+        raise ValueError(f'{Path(path).name}: expected an object like {{"16": "2.2"}}')
+    return {str(k): str(v) for k, v in data.items()}
 
 
 def decode_iris(enc):
@@ -312,6 +332,8 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
     band_px = round(TAPES[tape_mm]["band_pt"] / PT_PER_PX)          # image height
     end_margin_mm = END_MARGIN_PT / MM_TO_PT                        # 1.976 mm
     printable_mm = label_mm - 2 * end_margin_mm
+    if scale_mm <= 0:
+        sys.exit(f"scale must be greater than 0 mm (got {scale_mm:g})")
     if scale_mm > printable_mm + 1e-6:
         sys.exit(f"scale {scale_mm} mm does not fit: label {label_mm} mm has "
                  f"{printable_mm:.2f} mm printable (leader/trailer {end_margin_mm:.2f} mm each end)")
@@ -491,7 +513,7 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
     if info_text:
         box = draw.textbbox((0, 0), info_text, font=f_info)
         ih = box[3] - box[1]
-        bottom_used = base_h + tick_h + gap + num_h
+        bottom_used = base_h + tick_h + gap + max(9, trial_h)       # size actually used
         if rot_info_ok if rotate_marks else (band_px - bottom_used >= ih + 4):
             ix = max(2, round(scale_x0_mm * DPMM))
             draw.text((ix, 2 - box[1]), info_text, font=f_info, fill=0)
@@ -627,7 +649,7 @@ def build_info(details, channel, scale_mm):
 def main():
     ap = argparse.ArgumentParser(description="Lens-map XML -> Brother P-touch .lbx scale label")
     ap.add_argument("lensfile", help="lens map XML (e.g. XA100845.XML)")
-    ap.add_argument("-o", "--out", help="output .lbx path (default: <lensfile>_<channel>.lbx)")
+    ap.add_argument("-o", "--out", help="output .lbx path (default: <stem>_<channel>.lbx next to the lens file)")
     ap.add_argument("--channel", choices=["iris", "focus"], default="iris")
     ap.add_argument("--tape", type=int, choices=sorted(TAPES), default=18, help="tape width mm (default 18)")
     ap.add_argument("--length", type=float, default=200.0, help="total label length mm (default 200)")
@@ -663,17 +685,18 @@ def main():
     ap.add_argument("--preview", help="preview PNG path (default: alongside the .lbx)")
     args = ap.parse_args()
 
-    details, channels = parse_lensmap(args.lensfile)
+    try:
+        details, channels = parse_lensmap(args.lensfile)
+        overrides = load_key(args.key) if args.key else {}
+    except (ValueError, OSError) as e:
+        sys.exit(f"error: {e}")
     if args.channel not in channels or not channels[args.channel]:
         sys.exit(f"no <{args.channel}> marks found in {args.lensfile} "
                  f"(has: {', '.join(channels) or 'none'})")
 
-    overrides = {}
-    if args.key:
-        overrides.update({str(k): str(v) for k, v in json.load(open(args.key)).items()})
     for m in args.map:
         k, _, v = m.partition("=")
-        if not v:
+        if not k.strip() or not v:
             sys.exit(f"bad --map value: {m!r} (expected ENC=TEXT)")
         overrides[k.strip()] = v.strip()
 
@@ -695,7 +718,7 @@ def main():
         print(w, file=sys.stderr)
 
     stem = Path(args.lensfile).stem
-    out = Path(args.out) if args.out else Path(f"{stem}_{args.channel}.lbx")
+    out = Path(args.out) if args.out else Path(args.lensfile).with_name(f"{stem}_{args.channel}.lbx")
     title = f"{details.get('brand', '')} {details.get('name', '')} {details.get('focalLength', '')}mm {args.channel} scale".strip()
     write_lbx(out, img, args.tape, args.length, title, f"{stem}_{args.channel}.png")
     preview = Path(args.preview) if args.preview else out.with_suffix(".png")

@@ -6,10 +6,15 @@
 # Build with:  pyinstaller lenslabels.spec
 
 import os
+import re
 import sys
 from pathlib import Path
 
 here = Path(SPECPATH)
+
+# single source of truth for the version: __version__ in lensmap2lbx.py
+version = re.search(r'^__version__ = "([^"]+)"',
+                    (here / "lensmap2lbx.py").read_text(encoding="utf-8"), re.M).group(1)
 
 if sys.platform == "darwin":
     icon = str(here / "assets" / "icon.icns")
@@ -70,7 +75,7 @@ if sys.platform == "darwin":
         icon=icon,
         bundle_identifier="org.lensmap2lbx.LensLabels",
         info_plist={
-            "CFBundleShortVersionString": "1.3.2",
+            "CFBundleShortVersionString": version,
             "NSHighResolutionCapable": True,
         },
     )

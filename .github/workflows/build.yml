@@ -13,8 +13,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-latest               # Apple Silicon
             artifact: LensLabels-macOS
+          - os: macos-15-intel             # Intel Macs
+            artifact: LensLabels-macOS-Intel
           - os: windows-latest
             artifact: LensLabels-Windows
     runs-on: ${{ matrix.os }}
