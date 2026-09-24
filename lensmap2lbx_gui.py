@@ -443,6 +443,20 @@ class App:
             except OSError as e:
                 messagebox.showerror("lensmap2lbx", f"Cannot create destination:\n{e}")
                 return
+            # one folder: same-named XMLs from different folders would overwrite
+            # each other (case-insensitive, as on macOS/Windows file systems)
+            by_stem = {}
+            for p in paths:
+                by_stem.setdefault(Path(p).stem.lower(), []).append(p)
+            clashes = [ps for ps in by_stem.values() if len(ps) > 1]
+            if clashes:
+                messagebox.showerror(
+                    "lensmap2lbx",
+                    "These files have the same name, so their labels would overwrite "
+                    "each other in one folder:\n\n"
+                    + "\n\n".join("\n".join(ps) for ps in clashes)
+                    + "\n\nUse 'Next to Each XML', or generate them separately.")
+                return
         ok = err = warned = 0
         for item in self.tree.get_children():
             path = self.tree.item(item, "text")
