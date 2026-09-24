@@ -73,6 +73,9 @@ python3 lensmap2lbx.py examples/XA100845.XML --no-iris-tenths
 python3 lensmap2lbx.py examples/XA100845.XML --channel focus --tape 12
 ```
 
+Run the tests with `python3 -m unittest discover -s tests` (GitHub Actions
+runs them on every push and pull request).
+
 ## Building the apps yourself
 
 ```
