@@ -148,7 +148,7 @@ class App:
         self.global_key = tk.StringVar(value=v["global_key"])
         self.auto_keys = tk.BooleanVar(value=v["auto_keys"])
         self.manual_maps = tk.StringVar(value=v["manual_maps"])
-        self.rotate_marks = tk.BooleanVar(value=False)
+        self.rotate_marks = tk.BooleanVar(value=v["rotate_marks"])
         self.uniform_size = tk.BooleanVar(value=True)
         self._size_cache = {}                             # (path, settings) -> px
         self.dest_mode = tk.StringVar(value="beside")     # beside | folder
