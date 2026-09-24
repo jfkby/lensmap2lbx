@@ -78,10 +78,11 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
+from xml.sax.saxutils import escape
 from pathlib import Path
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
 except ImportError:
     sys.exit("This tool needs Pillow:  pip install pillow")
 
@@ -218,8 +219,8 @@ def mark_labels(marks, channel, overrides, focus_units, iris_tenths=False,
             text = overrides[str(enc)]
             if iris_tenths and channel == "iris":
                 try:
-                    text = fstop_tenths(float(text.lstrip("TtFf")))
-                except ValueError:
+                    text = fstop_tenths(float(text.lstrip("TtFf/")))
+                except (ValueError, OverflowError):
                     pass                        # verbatim
         elif channel == "iris":
             f = decode_iris(enc)
@@ -408,11 +409,12 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
 
         # priority: keep the info line, shrinking marks to coexist with it;
         # drop it only if even the smallest tier cannot fit alongside it
+        # (a pinned size skips the pitch test, but must still clear the info line)
         chosen = None
         for trial_h in trials:
             mets, pitch_ok, maxw = measure(trial_h)
-            if num_h_override or (pitch_ok and maxw <= avail):
-                chosen = (trial_h, mets)
+            if (pitch_ok or num_h_override) and maxw <= avail:
+                chosen = (trial_h, mets, pitch_ok)
                 break
         if chosen is None:
             if rot_info_ok:
@@ -422,19 +424,25 @@ def render(marks, info_text, tape_mm, label_mm, scale_mm, reverse, rotate180,
                       file=sys.stderr)
             for trial_h in trials:
                 mets, pitch_ok, maxw = measure(trial_h)
-                if (pitch_ok and maxw <= avail) or trial_h == trials[-1]:
-                    chosen = (trial_h, mets)
+                if ((pitch_ok or num_h_override) and maxw <= avail) or trial_h == trials[-1]:
+                    chosen = (trial_h, mets, pitch_ok)
                     break
-        trial_h, mets = chosen
+        trial_h, mets, pitch_ok = chosen
+        if not pitch_ok:
+            print("warning: marks too close for vertical numbers — some overlap; "
+                  "try a longer scale or --no-rotate-marks", file=sys.stderr)
         for (pos, enc, _), met in zip(marks, mets):
             hh = met.get("H", met["mb"][3] - met["mb"][1])
             tile = Image.new("L", (math.ceil(met["w"]) + 2, hh + 2), 255)
             draw_label(ImageDraw.Draw(tile), 1, hh + 1, met)
-            rot = tile.rotate(90, expand=True)
+            # a rotated infinity sign reads as an 8 — keep it upright
+            rot = tile if met["text"] == "∞" else tile.rotate(90, expand=True)
             x_num = round(x_f(pos) - rot.width / 2.0)               # center on tick
             x_num = min(max(x_num, 2), img_w - rot.width - 2)       # clamp inside
             y_num = max(2, anchor - rot.height)
-            img.paste(rot, (int(x_num), int(y_num)))
+            # paste ink only: the tile's white background must not erase
+            # neighbouring labels where crowded marks overlap
+            img.paste(0, (int(x_num), int(y_num)), mask=ImageOps.invert(rot))
             label_boxes.append((enc, met["text"], x_num, x_num + rot.width))
     else:
         # center on ticks, then resolve collisions by nudging apart; shrink the
@@ -578,10 +586,10 @@ def write_lbx(out_path, img, tape_mm, label_mm, title, orig_name):
         tape_w=fmt_pt(t["width_pt"]), label_pt=fmt_pt(label_mm * MM_TO_PT),
         side_m=fmt_pt(t["side_margin_pt"]), fmt=t["fmt"],
         img_w_pt=fmt_pt(img_w_pt), band_pt=fmt_pt(t["band_pt"]),
-        orig_name=orig_name,
+        orig_name=escape(orig_name, {'"': "&quot;"}),
     )
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    prop_xml = PROP_XML.format(title=title, ts=ts)
+    prop_xml = PROP_XML.format(title=escape(title), ts=ts)
     bmp = io.BytesIO()
     img.convert("RGB").save(bmp, format="BMP")                      # 24-bit like the editor's own
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
