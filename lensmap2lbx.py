@@ -649,7 +649,7 @@ def build_info(details, channel, scale_mm):
 def main():
     ap = argparse.ArgumentParser(description="Lens-map XML -> Brother P-touch .lbx scale label")
     ap.add_argument("lensfile", help="lens map XML (e.g. XA100845.XML)")
-    ap.add_argument("-o", "--out", help="output .lbx path (default: <lensfile>_<channel>.lbx)")
+    ap.add_argument("-o", "--out", help="output .lbx path (default: <stem>_<channel>.lbx next to the lens file)")
     ap.add_argument("--channel", choices=["iris", "focus"], default="iris")
     ap.add_argument("--tape", type=int, choices=sorted(TAPES), default=18, help="tape width mm (default 18)")
     ap.add_argument("--length", type=float, default=200.0, help="total label length mm (default 200)")
@@ -718,7 +718,7 @@ def main():
         print(w, file=sys.stderr)
 
     stem = Path(args.lensfile).stem
-    out = Path(args.out) if args.out else Path(f"{stem}_{args.channel}.lbx")
+    out = Path(args.out) if args.out else Path(args.lensfile).with_name(f"{stem}_{args.channel}.lbx")
     title = f"{details.get('brand', '')} {details.get('name', '')} {details.get('focalLength', '')}mm {args.channel} scale".strip()
     write_lbx(out, img, args.tape, args.length, title, f"{stem}_{args.channel}.png")
     preview = Path(args.preview) if args.preview else out.with_suffix(".png")
