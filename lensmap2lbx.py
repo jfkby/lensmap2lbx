@@ -103,7 +103,7 @@ TAPES = {
     24: dict(width_pt=68.0, side_margin_pt=8.4, fmt="261", band_pt=51.2),
 }
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 
 def app_dir():
