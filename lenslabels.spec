@@ -70,7 +70,7 @@ if sys.platform == "darwin":
         icon=icon,
         bundle_identifier="org.lensmap2lbx.LensLabels",
         info_plist={
-            "CFBundleShortVersionString": "1.3.1",
+            "CFBundleShortVersionString": "1.3.2",
             "NSHighResolutionCapable": True,
         },
     )
