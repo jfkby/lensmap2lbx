@@ -17,7 +17,6 @@ macOS: any python.org or Homebrew Python includes Tk; if import fails,
 `brew install python-tk`.
 """
 
-import json
 import sys
 import traceback
 from pathlib import Path
@@ -52,23 +51,32 @@ def parse_manual_maps(text):
     out = {}
     for tok in text.replace(",", " ").split():
         k, _, v = tok.partition("=")
-        if not v:
+        if not k.strip() or not v:
             raise ValueError(f"bad override {tok!r} (expected ENC=TEXT)")
         out[k.strip()] = v.strip()
     return out
+
+
+def per_lens_key(xml_path):
+    return Path(xml_path).parent / (Path(xml_path).stem + ".key.json")
+
+
+def mtime(path):
+    try:
+        return Path(path).stat().st_mtime if path else None
+    except OSError:
+        return None
 
 
 def gather_overrides(xml_path, s):
     """Merge global key file, per-lens key file, manual maps (that order)."""
     overrides = {}
     if s["global_key"]:
-        overrides.update({str(k): str(v) for k, v in
-                          json.load(open(s["global_key"])).items()})
+        overrides.update(core.load_key(s["global_key"]))
     if s["auto_keys"]:
-        per = Path(xml_path).parent / (Path(xml_path).stem + ".key.json")
+        per = per_lens_key(xml_path)
         if per.exists():
-            overrides.update({str(k): str(v) for k, v in
-                              json.load(open(per)).items()})
+            overrides.update(core.load_key(per))
     overrides.update(parse_manual_maps(s["manual_maps"]))
     return overrides
 
@@ -354,7 +362,8 @@ class App:
         pkey = tuple(sorted((k, v) for k, v in probe.items()))
         sizes = []
         for p in self.files():
-            key = (p, pkey)
+            # file mtimes in the key: editing an XML or key file re-measures it
+            key = (p, pkey, mtime(p), mtime(per_lens_key(p)), mtime(s["global_key"]))
             if key not in self._size_cache:
                 try:
                     *_, layout = build_label(p, probe, self.fonts)
@@ -423,8 +432,6 @@ class App:
             messagebox.showerror("lensmap2lbx", str(e))
             return
         s = self.apply_uniform(s)
-        if s["fit"] and s["endstops"]:
-            pass                                    # core warns per-file if out of range
         if self.dest_mode.get() == "folder":
             if not self.dest_folder.get().strip():
                 messagebox.showerror("lensmap2lbx", "Choose a destination folder "
