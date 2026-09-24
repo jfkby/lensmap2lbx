@@ -97,6 +97,13 @@ def build_label(xml_path, s, fonts):
         raise ValueError(str(e.code)) from None
 
 
+def warning_text(layout):
+    """layout["warnings"] -> one short line for the GUI, prefixes dropped."""
+    msgs = [w.split(": ", 1)[1] if w.startswith(("warning: ", "note: ")) else w
+            for w in layout.get("warnings", [])]
+    return "; ".join(msgs)
+
+
 def write_outputs(xml_path, dest_dir, s, details, img):
     """Write <stem>_<channel>.lbx + .png into dest_dir. Returns lbx Path."""
     stem = Path(xml_path).stem
@@ -267,13 +274,18 @@ class App:
         # -- bottom: preview + status --
         bot = ttk.LabelFrame(self.root, text="Preview (Exact Print Raster, Scaled to Fit)",
                              padding=4)
-        bot.pack(fill="x", padx=6, pady=(0, 6))
+        # preview + status pack from the bottom ahead of the settings frame, so
+        # a short window squeezes the settings rather than hiding these
+        bot.pack(side="bottom", fill="x", padx=6, pady=(0, 6), before=top)
         self.canvas = tk.Canvas(bot, height=150, background="#d0d0d0",
                                 highlightthickness=0)
         self.canvas.pack(fill="x")
         self.canvas.bind("<Configure>", lambda e: self.schedule_preview())
         self.status = ttk.Label(self.root, anchor="w", padding=(8, 2))
-        self.status.pack(fill="x")
+        self.status.pack(side="bottom", fill="x", before=bot)
+        # wrap rather than clip: warnings can make the line wider than the window
+        self.status.bind("<Configure>",
+                         lambda e: self.status.config(wraplength=max(200, e.width - 16)))
         if not HAVE_IMAGETK:
             self.status.config(text="Pillow ImageTk missing — preview disabled "
                                     "(generation still works).")
@@ -360,6 +372,9 @@ class App:
         kids = self.tree.get_children()
         return self.tree.item(kids[0], "text") if kids else None
 
+    def set_status(self, text, warn=False):
+        self.status.config(text=text, foreground="#b35c00" if warn else "")
+
     # ---- preview -----------------------------------------------------------
 
     def schedule_preview(self):
@@ -372,19 +387,20 @@ class App:
         path = self.selected_file()
         self.canvas.delete("all")
         if not path:
-            self.status.config(text="Add lens map XML files to begin.")
+            self.set_status("Add lens map XML files to begin.")
             return
         try:
             s = self.apply_uniform(self.settings())
             details, img, marks, layout = build_label(path, s, self.fonts)
         except Exception as e:
-            self.status.config(text=f"{Path(path).name}: {e}")
+            self.set_status(f"{Path(path).name}: {e}", warn=True)
             return
         mm_w = img.width / core.DPMM
-        self.status.config(
-            text=f"{Path(path).name} — {len(marks)} marks, {img.width}×{img.height}px "
-                 f"({mm_w:.1f} × {img.height / core.DPMM:.1f} mm printable) "
-                 f"on {s['tape']} mm tape, mark size {layout['num_h']} px")
+        text = (f"{Path(path).name} — {len(marks)} marks, {img.width}×{img.height}px "
+                f"({mm_w:.1f} × {img.height / core.DPMM:.1f} mm printable) "
+                f"on {s['tape']} mm tape, mark size {layout['num_h']} px")
+        warn = warning_text(layout)
+        self.set_status(f"{text}  ⚠ {warn}" if warn else text, warn=bool(warn))
         if not HAVE_IMAGETK:
             return
         cw = max(self.canvas.winfo_width(), 50)
@@ -420,24 +436,31 @@ class App:
             except OSError as e:
                 messagebox.showerror("lensmap2lbx", f"Cannot create destination:\n{e}")
                 return
-        ok = err = 0
+        ok = err = warned = 0
         for item in self.tree.get_children():
             path = self.tree.item(item, "text")
             if path not in paths:
                 continue
             try:
-                details, img, _, _ = build_label(path, s, self.fonts)
+                details, img, _, layout = build_label(path, s, self.fonts)
                 d = Path(path).parent if self.dest_mode.get() == "beside" \
                     else Path(self.dest_folder.get())
                 out = write_outputs(path, d, s, details, img)
-                self.tree.set(item, "status", f"✓ {out.name}")
+                warn = warning_text(layout)
+                self.tree.set(item, "status",
+                              f"⚠ {out.name}: {warn}" if warn else f"✓ {out.name}")
+                warned += bool(warn)
                 ok += 1
             except Exception as e:
                 self.tree.set(item, "status", f"✗ {e}")
                 err += 1
             self.root.update_idletasks()
-        self.status.config(text=f"Generated {ok} label(s)"
-                                + (f", {err} failed — see Status column" if err else "."))
+        notes = [f"{err} failed" if err else "",
+                 f"{warned} with warnings" if warned else ""]
+        notes = ", ".join(n for n in notes if n)
+        self.set_status(f"Generated {ok} label(s)"
+                        + (f", {notes} — see Status column" if notes else "."),
+                        warn=bool(notes))
 
     def generate_all(self):
         self.generate(self.files())
