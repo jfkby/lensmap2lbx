@@ -44,7 +44,9 @@ preview written next to each `.lbx` is the *identical* raster that prints.
 ## Download
 
 Ready-made apps for macOS and Windows are on the
-[Releases](../../releases) page — no Python required. macOS releases are
+[Releases](../../releases) page — no Python required.
+`LensLabels-macOS.zip` is for Apple Silicon Macs, `LensLabels-macOS-Intel.zip`
+for Intel Macs. macOS releases are
 signed and notarized when the repo's signing secrets are configured (see
 [docs/notarization.md](docs/notarization.md)); unsigned builds need
 right-click → Open on first launch.
